@@ -1,17 +1,15 @@
- import { PaperAnalysisResponse, GameSettings } from "../types";
+import { PaperAnalysisResponse, GameSettings } from "../types";
 
-// 🔴 在下面双引号里填入你刚申请的 OpenRouter API Key（以 sk-or-v1- 开头）
+// 🔴 在下面双引号里填入你的 OpenRouter API Key（以 sk-or-v1- 开头）
 const OPENROUTER_API_KEY = "sk-or-v1-ad0...0e4";
 
-// 自动按顺序尝试 OpenRouter 上的免费大模型，防止单个免费模型拥挤
-const FREE_MODELS = [
+const MODELS_TO_TRY = [
+  "openrouter/free",
   "google/gemini-2.0-flash-exp:free",
-  "deepseek/deepseek-chat-v3-0324:free",
-  "qwen/qwen-2.5-72b-instruct:free",
-  "meta-llama/llama-3.3-70b-instruct:free"
+  "meta-llama/llama-3.3-70b-instruct:free",
+  "qwen/qwen-2.5-72b-instruct:free"
 ];
 
-// 将上传的文件转换为 Base64 或纯文本
 const readFileData = async (file: File): Promise<{ isPdf: boolean; content: string }> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -67,7 +65,7 @@ export const analyzePaper = async (file: File, settings: GameSettings): Promise<
     5. **总结与八卦 (Conclusion)**：这论文有没有灌水的嫌疑？或者真的很有跨时代意义？
     
     【极其重要的输出格式要求】：
-    你必须只输出纯合法的 JSON 字符串，绝对不要包含 \`\`\`json 或 \`\`\` 等 Markdown 标记，也不要输出任何多余解释文字。
+    你必须只输出纯合法的 JSON 字符串，绝对不要包含 markdown 代码块标记，也不要输出任何多余解释文字。
     JSON 必须严格符合以下结构：
     {
       "title": "论文标题或趣味总结",
@@ -100,7 +98,9 @@ export const analyzePaper = async (file: File, settings: GameSettings): Promise<
     });
   }
 
-  for (const model of FREE_MODELS) {
+  let lastErrorMsg = "未知错误";
+
+  for (const model of MODELS_TO_TRY) {
     try {
       const response = await fetch("https://openrouter.ai", {
         method: "POST",
@@ -118,22 +118,27 @@ export const analyzePaper = async (file: File, settings: GameSettings): Promise<
       });
 
       if (!response.ok) {
+        const errText = await response.text();
+        lastErrorMsg = `HTTP ${response.status}: ${errText.slice(0, 120)}`;
         continue;
       }
 
       const data = await response.json();
-      let rawText: string = data.choices?.[0]?.message?.content || "";
-      if (!rawText) continue;
+      const choices = data.choices || [];
+      let rawText: string = (choices[0] && choices[0].message && choices[0].message.content) || "";
+      if (!rawText) {
+        lastErrorMsg = "模型返回内容为空";
+        continue;
+      }
 
-      // 清理模型可能自带的 markdown 代码块符号
       rawText = rawText.replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/\s*```$/i, "").trim();
 
       const parsed = JSON.parse(rawText) as PaperAnalysisResponse;
       if (parsed && Array.isArray(parsed.script) && parsed.script.length > 0) {
         return parsed;
       }
-    } catch (err) {
-      console.warn(`Model ${model} failed, trying next...`, err);
+    } catch (err: any) {
+      lastErrorMsg = err?.message || String(err);
     }
   }
 
@@ -142,12 +147,12 @@ export const analyzePaper = async (file: File, settings: GameSettings): Promise<
     script: [
       {
         speaker: "丛雨",
-        text: "呜... 主殿，连结彼岸的通道似乎被干扰了（API Request Failed）。",
+        text: `呜... 主殿，通道还是被干扰了（具体原因：${lastErrorMsg}）。`,
         emotion: "shy"
       },
       {
         speaker: "丛雨",
-        text: "请检查 OpenRouter 的 API Key 是否正确填写，或者稍后再试一次のじゃ！",
+        text: "如果是 PDF 格式无法读取，主殿可以试试直接上传 .txt 纯文本文件のじゃ！",
         emotion: "angry"
       }
     ]
