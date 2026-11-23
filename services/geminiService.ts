@@ -1,202 +1,149 @@
-import { PaperAnalysisResponse, GameSettings } from "../types";
+import { GoogleGenAI, Type } from "@google/genai";
+import { PaperAnalysisResponse, DialogueLine, GameSettings } from "../types";
 
-const OPENROUTER_API_KEY = "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";
-
-const MODELS_TO_TRY = [
-  "google/gemini-2.0-flash-exp:free",
-  "qwen/qwen-2.5-72b-instruct:free",
-  "meta-llama/llama-3.3-70b-instruct:free",
-  "openrouter/free"
-];
-
-/**
- * 透過 CDN 動態載入 PDF.js，避免 Vercel 打包找不到本地依賴
- */
-const extractTextFromFile = async (file: File): Promise<string> => {
-  const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
-
-  if (!isPdf) {
-    return await file.text();
-  }
-
-  // 從 jsDelivr CDN 動態載入 pdfjs-dist 4.8.69
-  const pdfjsUrl = "https://jsdelivr.net";
-  const workerUrl = "https://jsdelivr.net";
-
-  // @ts-ignore - 忽略 TypeScript 對遠端 URL import 的型別檢查
-  const pdfjsLib = await import(/* @vite-ignore */ pdfjsUrl);
-  pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
-
-  const arrayBuffer = await file.arrayBuffer();
-  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-  let fullText = "";
-
-  for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
-    const page = await pdf.getPage(pageNum);
-    const textContent = await page.getTextContent();
-    const pageText = textContent.items
-      .map((item: any) => item.str)
-      .join(" ");
-    fullText += `\n--- Page ${pageNum} ---\n${pageText}`;
-  }
-
-  return fullText;
+// Helper to convert File to Base64
+const fileToGenerativePart = async (file: File): Promise<{ inlineData: { data: string; mimeType: string } }> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const base64Data = reader.result as string;
+      const base64Content = base64Data.split(',')[1];
+      resolve({
+        inlineData: {
+          data: base64Content,
+          mimeType: file.type,
+        },
+      });
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
 };
 
-/**
- * 從模型回覆中安全提取並解析 JSON
- */
-const parseSafeJson = (rawText: string): PaperAnalysisResponse => {
-  let cleaned = rawText
-    .replace(/^```json\s*/i, "")
-    .replace(/^```\s*/i, "")
-    .replace(/\s*```$/i, "")
-    .trim();
+export const analyzePaper = async (file: File, settings: GameSettings): Promise<PaperAnalysisResponse> => {
+  
+  // =========================================================================================
+  // API KEY CONFIGURATION / API Key 配置
+  // 
+  // [Current Status]: Using Hardcoded Gemini Key provided by user.
+  // [当前状态]: 使用用户提供的硬编码 Gemini Key。
+  //
+  // [How to change to DeepSeek / OpenAI / Other APIs]:
+  // The current code uses the `@google/genai` SDK which ONLY works with Google Gemini models.
+  // If you want to use DeepSeek (which is OpenAI-compatible), you CANNOT use this SDK.
+  //
+  // You must rewrite this function to use standard `fetch` or the `openai` library:
+  // 
+  // const response = await fetch("https://api.deepseek.com/chat/completions", {
+  //   method: "POST",
+  //   headers: { "Content-Type": "application/json", "Authorization": "Bearer YOUR_DEEPSEEK_KEY" },
+  //   body: JSON.stringify({ ... })
+  // });
+  //
+  // =========================================================================================
+  
+  // Replace this string if you want to use a different Gemini Key
+  const API_KEY = "AIzaSyCPVlvIzjkm0VyDPyCGaZoMo3oa8zTSZAc"; 
 
-  const firstBrace = cleaned.indexOf("{");
-  const lastBrace = cleaned.lastIndexOf("}");
-  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-    cleaned = cleaned.slice(firstBrace, lastBrace + 1);
-  }
+  const ai = new GoogleGenAI({ apiKey: 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 });
+  
+  const model = "gemini-2.5-flash"; 
+  
+  const filePart = await fileToGenerativePart(file);
 
-  return JSON.parse(cleaned) as PaperAnalysisResponse;
-};
+  // Customize prompt based on settings
+  const detailInstruction = settings.detailLevel === 'detailed' 
+    ? "讲解要极其细致，对话回合数至少要25轮以上。不要略过任何技术细节，尤其是方法论和实验部分。" 
+    : (settings.detailLevel === 'academic' 
+        ? "讲解要专业且有深度，使用专业术语但随后进行解释，重点分析论文的创新点和不足，对话长度30轮左右。" 
+        : "讲解要简明扼要，重点突出，适合快速阅读，15轮左右。");
 
-export const analyzePaper = async (
-  file: File,
-  settings: GameSettings
-): Promise<PaperAnalysisResponse> => {
-  let paperText = "";
+  const personalityInstruction = settings.personality === 'tsundere'
+    ? "语气要非常傲娇。虽然很嫌弃主殿（用户）看不懂，但还是很用心地解释。多用“真拿你没办法”、“笨蛋主殿”等词汇。"
+    : (settings.personality === 'gentle'
+        ? "语气要非常温柔，像大姐姐一样。多鼓励主殿，“没关系，慢慢来”、“主殿真棒”。"
+        : "语气要严厉，像魔鬼教官。要求主殿必须跟上思路，不许偷懒。");
+
+  const prompt = `
+    你现在是Visual Novel游戏中的角色“丛雨”（Murasame）。
+    
+    人物设定：
+    1. 身份：寄宿在神刀“丛雨丸”中的守护灵，活了五百年的幼女姿态。
+    2. 称呼：自称“吾辈”（Wagahai），称呼用户为“主殿”（Aruji-dono）。
+    3. 核心性格：古风，博学，${personalityInstruction}
+    4. 口癖：句尾常带“...のじゃ”(noja), “...おる”(oru), “...なのだ”(nanoda), “...である”(dearu)。
+    
+    任务：阅读这篇论文，并以Visual Novel对话的形式向“主殿”详细讲解。
+    
+    ${detailInstruction}
+    
+    请严格按以下结构进行讲解（不要在对话中直接说是“第一部分”，要自然地流露）：
+    1. **开场 (Intro)**：评价标题，或者针对论文的长度/难度发发牢骚。
+    2. **背景与痛点 (Background)**：这篇论文究竟是解决什么问题的？为什么以前的方法不行？（此处需要跟主殿互动，确认他听懂了）。
+    3. **核心方法 (Methodology)**：这是最重要的地方。详细拆解它的模型架构、算法公式（用比喻解释）、创新模块。必须分点讲清楚。
+    4. **实验结果 (Experiments)**：在什么数据集上做的？SOTA对比如何？有没有什么消融实验值得注意？
+    5. **总结与八卦 (Conclusion)**：这论文有没有灌水的嫌疑？或者真的很有跨时代意义？
+    
+    Output MUST be valid JSON matching the schema provided. 
+    The 'script' array MUST contain enough items to satisfy the length requirement.
+  `;
+
   try {
-    paperText = await extractTextFromFile(file);
-    if (!paperText.trim()) {
-      throw new Error("未能从文件中提取到任何有效文字（可能是纯图片扫描版 PDF）。");
-    }
-  } catch (err: any) {
+    const response = await ai.models.generateContent({
+      model: model,
+      contents: {
+        parts: [
+            filePart,
+            { text: prompt }
+        ]
+      },
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            title: { type: Type.STRING, description: "The title of the paper or a funny summary of it" },
+            script: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  speaker: { type: Type.STRING, enum: ["丛雨", "Murasame"] },
+                  text: { type: Type.STRING, description: "The dialogue content" },
+                  emotion: { type: Type.STRING, enum: ["normal", "happy", "angry", "surprised", "shy", "proud"] },
+                  note: { type: Type.STRING, description: "Optional explanation for technical terms, pop up on screen", nullable: true }
+                },
+                required: ["speaker", "text", "emotion"]
+              }
+            }
+          },
+          required: ["title", "script"]
+        }
+      }
+    });
+
+    const text = response.text;
+    if (!text) throw new Error("No response from Gemini");
+
+    return JSON.parse(text) as PaperAnalysisResponse;
+
+  } catch (error) {
+    console.error("Error analyzing paper:", error);
+    // Fallback error script
     return {
-      title: "卷轴解析失败",
+      title: "灵力回路遮断",
       script: [
         {
           speaker: "丛雨",
-          text: `呜... 吾辈打不开这本卷轴のじゃ！（原因：${err?.message || "文件读取失败"}）`,
+          text: "呜... 主殿，连结彼岸的通道似乎被干扰了（API Request Failed）。",
           emotion: "shy"
+        },
+        {
+          speaker: "丛雨",
+          text: "是不是你的API Key没放对地方？或者是这篇论文有结界？",
+          emotion: "angry"
         }
       ]
     };
   }
-
-  const detailInstruction =
-    settings.detailLevel === "detailed"
-      ? "讲解要极其细致，对话回合数至少要25轮以上。不要略过任何技术细节，尤其是方法论和实验部分。"
-      : settings.detailLevel === "academic"
-      ? "讲解要专业且有深度，使用专业术语但随后进行解释，重点分析论文的创新点和不足，对话长度30轮左右。"
-      : "讲解要简明扼要，重点突出，适合快速阅读，15轮左右。";
-
-  const personalityInstruction =
-    settings.personality === "tsundere"
-      ? "语气要非常傲娇。虽然很嫌弃主殿（用户）看不懂，但还是很用心地解释。多用“真拿你没办法”、“笨蛋主殿”等词汇。"
-      : settings.personality === "gentle"
-      ? "语气要非常温柔，像大姐姐一样。多鼓励主殿，“没关系，慢慢来”、“主殿真棒”。"
-      : "语气要严厉，像魔鬼教官。要求主殿必须跟上思路，不许偷懒。";
-
-  const prompt = `
-你现在是Visual Novel游戏中的角色“丛雨”（Murasame）。
-
-人物设定：
-1. 身份：寄宿在神刀“丛雨丸”中的守护灵，活了五百年的幼女姿态。
-2. 称呼：自称“吾辈”（Wagahai），称呼用户为“主殿”（Aruji-dono）。
-3. 核心性格：古风，博学，${personalityInstruction}
-4. 口癖：句尾常带“...のじゃ”(noja), “...おる”(oru), “...なのだ”(nanoda), “...である”(dearu)。
-
-任务：阅读这篇论文，并以Visual Novel对话的形式向“主殿”详细讲解。
-
-${detailInstruction}
-
-请严格按以下结构进行讲解（不要在对话中直接说是“第一部分”，要自然地流露）：
-1. **开场 (Intro)**：评价标题，或者针对论文的长度/难度发发牢骚。
-2. **背景与痛点 (Background)**：这篇论文究竟是解决什么问题的？为什么以前的方法不行？（此处需要跟主殿互动，确认他听懂了）。
-3. **核心方法 (Methodology)**：这是最重要的地方。详细拆解它的模型架构、算法公式（用比喻解释）、创新模块。必须分点讲清楚。
-4. **实验结果 (Experiments)**：在什么数据集上做的？SOTA对比如何？有没有什么消融实验值得注意？
-5. **总结与八卦 (Conclusion)**：这论文有没有灌水的嫌疑？或者真的很有跨时代意义？
-
-【极其重要的输出格式要求】：
-你必须只输出纯合法的 JSON 字符串，绝对不要包含 markdown 代码块标记，也不要输出任何多余解释文字。
-JSON 必须严格符合以下结构：
-{
-  "title": "论文标题或趣味总结",
-  "script": [
-    {
-      "speaker": "丛雨",
-      "text": "对话内容",
-      "emotion": "normal",
-      "note": "可选的专业术语解释，没有则填 null"
-    }
-  ]
-}
-其中 emotion 只能从以下 6 个词中选一个："normal", "happy", "angry", "surprised", "shy", "proud"。
-
-以下是论文正文内容：
-${paperText.slice(0, 60000)}
-  `.trim();
-
-  let lastErrorMsg = "未知错误";
-
-  for (const model of MODELS_TO_TRY) {
-    try {
-      const response = await fetch("https://openrouter.ai", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${OPENROUTER_API_KEY.trim()}`,
-          "HTTP-Referer": window.location.origin,
-          "X-Title": "Paper2Galgame"
-        },
-        body: JSON.stringify({
-          model,
-          messages: [{ role: "user", content: prompt }],
-          temperature: 0.7
-        })
-      });
-
-      if (!response.ok) {
-        const errText = await response.text();
-        lastErrorMsg = `[${model}] HTTP ${response.status}: ${errText.slice(0, 120)}`;
-        continue;
-      }
-
-      const data = await response.json();
-      const rawText: string = data?.choices?.?.message?.content || "";
-
-      if (!rawText) {
-        lastErrorMsg = `[${model}] 模型返回内容为空`;
-        continue;
-      }
-
-      const parsed = parseSafeJson(rawText);
-
-      if (parsed && Array.isArray(parsed.script) && parsed.script.length > 0) {
-        return parsed;
-      } else {
-        lastErrorMsg = `[${model}] JSON 结构缺少有效的 script 数组`;
-      }
-    } catch (err: any) {
-      lastErrorMsg = `[${model}] ${err?.message || String(err)}`;
-    }
-  }
-
-  return {
-    title: "灵力回路遮断",
-    script: [
-      {
-        speaker: "丛雨",
-        text: `呜... 主殿，所有备用通道都被干扰了（最后错误：${lastErrorMsg}）。`,
-        emotion: "shy"
-      },
-      {
-        speaker: "丛雨",
-        text: "请主殿检查一下 API Key 额度，或者稍后再试一次のじゃ！",
-        emotion: "angry"
-      }
-    ]
-  };
 };
