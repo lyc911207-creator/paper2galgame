@@ -1,7 +1,6 @@
 import { PaperAnalysisResponse, GameSettings } from "../types";
 
-// 🔴 在下面双引号里填入你的 OpenRouter API Key（以 sk-or-v1- 开头）
-const OPENROUTER_API_KEY = "";
+const OPENROUTER_API_KEY = "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";
 
 const MODELS_TO_TRY = [
   "openrouter/free",
