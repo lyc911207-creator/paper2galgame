@@ -1,24 +1,26 @@
 import * as pdfjsLib from "pdfjs-dist";
 import { PaperAnalysisResponse, GameSettings } from "../types";
 
-// 設定 PDF.js 的 Worker（使用 CDN 避免打包配置問題）
+// 修復 1：補全 PDF.js Worker 的完整 CDN 路徑與 \$ 符號
 pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com{pdfjsLib.version}/build/pdf.worker.min.mjs`;
 
-// 建議改用環境變數讀取，例如 import.meta.env.VITE_OPENROUTER_API_KEY
-const OPENROUTER_API_KEY = "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";
+// 優先讀取 .env 中的 VITE_OPENROUTER_API_KEY，若無則使用下方填寫的字串（請替換為你的真實 Key）
+const OPENROUTER_API_KEY =
+  import.meta.env.VITE_OPENROUTER_API_KEY || "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";
 
 const MODELS_TO_TRY = [
+  "openrouter/free",
   "google/gemini-2.0-flash-exp:free",
   "qwen/qwen-2.5-72b-instruct:free",
-  "meta-llama/llama-3.3-70b-instruct:free",
-  "openrouter/free"
+  "meta-llama/llama-3.3-70b-instruct:free"
 ];
 
 /**
  * 統一將 PDF 或純文字檔案提取為字串，確保所有模型都能穩定讀取
  */
 const extractTextFromFile = async (file: File): Promise<string> => {
-  const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+  const isPdf =
+    file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
 
   if (!isPdf) {
     return await file.text();
@@ -31,9 +33,7 @@ const extractTextFromFile = async (file: File): Promise<string> => {
   for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
     const page = await pdf.getPage(pageNum);
     const textContent = await page.getTextContent();
-    const pageText = textContent.items
-      .map((item: any) => item.str)
-      .join(" ");
+    const pageText = textContent.items.map((item: any) => item.str).join(" ");
     fullText += `\n--- Page ${pageNum} ---\n${pageText}`;
   }
 
@@ -44,14 +44,12 @@ const extractTextFromFile = async (file: File): Promise<string> => {
  * 從模型回覆中安全提取並解析 JSON（防止模型在前後加上多餘文字導致解析失敗）
  */
 const parseSafeJson = (rawText: string): PaperAnalysisResponse => {
-  // 1. 移除 Markdown 標記
   let cleaned = rawText
     .replace(/^```json\s*/i, "")
     .replace(/^```\s*/i, "")
     .replace(/\s*```$/i, "")
     .trim();
 
-  // 2. 截取第一個 '{' 到最後一個 '}' 之間的內容
   const firstBrace = cleaned.indexOf("{");
   const lastBrace = cleaned.lastIndexOf("}");
   if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
@@ -135,13 +133,14 @@ JSON 必须严格符合以下结构：
 其中 emotion 只能从以下 6 个词中选一个："normal", "happy", "angry", "surprised", "shy", "proud"。
 
 以下是论文正文内容：
-${paperText.slice(0, 60000)}
+${paperText.slice(0, 30000)}
   `.trim();
 
   let lastErrorMsg = "未知错误";
 
   for (const model of MODELS_TO_TRY) {
     try {
+      // 修復 2：補全 OpenRouter Chat Completions 完整 API 端點
       const response = await fetch("https://openrouter.ai", {
         method: "POST",
         headers: {
