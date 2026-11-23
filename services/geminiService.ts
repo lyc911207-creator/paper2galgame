@@ -1,30 +1,31 @@
-import * as pdfjsLib from "pdfjs-dist";
 import { PaperAnalysisResponse, GameSettings } from "../types";
 
-// 修復 1：補全 PDF.js Worker 的完整 CDN 路徑與 \$ 符號
-pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com{pdfjsLib.version}/build/pdf.worker.min.mjs`;
-
-// 優先讀取 .env 中的 VITE_OPENROUTER_API_KEY，若無則使用下方填寫的字串（請替換為你的真實 Key）
-const OPENROUTER_API_KEY =
-  import.meta.env.VITE_OPENROUTER_API_KEY || "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";
+const OPENROUTER_API_KEY = "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";
 
 const MODELS_TO_TRY = [
-  "openrouter/free",
   "google/gemini-2.0-flash-exp:free",
   "qwen/qwen-2.5-72b-instruct:free",
-  "meta-llama/llama-3.3-70b-instruct:free"
+  "meta-llama/llama-3.3-70b-instruct:free",
+  "openrouter/free"
 ];
 
 /**
- * 統一將 PDF 或純文字檔案提取為字串，確保所有模型都能穩定讀取
+ * 透過 CDN 動態載入 PDF.js，避免 Vercel 打包找不到本地依賴
  */
 const extractTextFromFile = async (file: File): Promise<string> => {
-  const isPdf =
-    file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+  const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
 
   if (!isPdf) {
     return await file.text();
   }
+
+  // 從 jsDelivr CDN 動態載入 pdfjs-dist 4.8.69
+  const pdfjsUrl = "https://jsdelivr.net";
+  const workerUrl = "https://jsdelivr.net";
+
+  // @ts-ignore - 忽略 TypeScript 對遠端 URL import 的型別檢查
+  const pdfjsLib = await import(/* @vite-ignore */ pdfjsUrl);
+  pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
 
   const arrayBuffer = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
@@ -33,7 +34,9 @@ const extractTextFromFile = async (file: File): Promise<string> => {
   for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
     const page = await pdf.getPage(pageNum);
     const textContent = await page.getTextContent();
-    const pageText = textContent.items.map((item: any) => item.str).join(" ");
+    const pageText = textContent.items
+      .map((item: any) => item.str)
+      .join(" ");
     fullText += `\n--- Page ${pageNum} ---\n${pageText}`;
   }
 
@@ -41,7 +44,7 @@ const extractTextFromFile = async (file: File): Promise<string> => {
 };
 
 /**
- * 從模型回覆中安全提取並解析 JSON（防止模型在前後加上多餘文字導致解析失敗）
+ * 從模型回覆中安全提取並解析 JSON
  */
 const parseSafeJson = (rawText: string): PaperAnalysisResponse => {
   let cleaned = rawText
@@ -67,7 +70,7 @@ export const analyzePaper = async (
   try {
     paperText = await extractTextFromFile(file);
     if (!paperText.trim()) {
-      throw new Error("未能從文件中提取到任何有效文字（可能是純圖片掃描版 PDF）。");
+      throw new Error("未能从文件中提取到任何有效文字（可能是纯图片扫描版 PDF）。");
     }
   } catch (err: any) {
     return {
@@ -133,14 +136,13 @@ JSON 必须严格符合以下结构：
 其中 emotion 只能从以下 6 个词中选一个："normal", "happy", "angry", "surprised", "shy", "proud"。
 
 以下是论文正文内容：
-${paperText.slice(0, 30000)}
+${paperText.slice(0, 60000)}
   `.trim();
 
   let lastErrorMsg = "未知错误";
 
   for (const model of MODELS_TO_TRY) {
     try {
-      // 修復 2：補全 OpenRouter Chat Completions 完整 API 端點
       const response = await fetch("https://openrouter.ai", {
         method: "POST",
         headers: {
@@ -163,7 +165,7 @@ ${paperText.slice(0, 30000)}
       }
 
       const data = await response.json();
-      const rawText: string = data?.choices?.[0]?.message?.content || "";
+      const rawText: string = data?.choices?.?.message?.content || "";
 
       if (!rawText) {
         lastErrorMsg = `[${model}] 模型返回内容为空`;
