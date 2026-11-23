@@ -45,7 +45,7 @@ export const analyzePaper = async (file: File, settings: GameSettings): Promise<
   // Replace this string if you want to use a different Gemini Key
   const API_KEY = "AIzaSyCPVlvIzjkm0VyDPyCGaZoMo3oa8zTSZAc"; 
 
-  const ai = new GoogleGenAI({ apiKey: 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 });
+  const ai = new GoogleGenAI({ apiKey: });
   
   const model = "gemini-2.5-flash"; 
   
